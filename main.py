@@ -1,6 +1,6 @@
 from http.cookiejar import month
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, BackgroundTasks, File, Query
 from fastapi.responses import FileResponse
@@ -113,17 +113,17 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
   except Exception as ex:
     return {'status': 'ERROR', 'message': str(ex)}
 
-@app.get('/api/calculate-bond')
-def calculate_bond():
+@app.post('/api/calculate-bond')
+def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), frequency_count: int = Form(), nominal: float = Form(), issue_date: str = Form(), maturity_date: str = Form()):
   try:
-    coupon_rate = 0.0865
-    yield_rate = 0.067
-    frequency = 4
-    nominal = 5_000_000_000
+    coupon_rate =  rate_coupon/100
+    yield_rate =  rate_yield/100
+    frequency = frequency_count
+    nominal = nominal * 1e9
 
     # Assume today's date as the issue date for simplicity
-    issue_date = datetime(year=2024, month=8, day=31)
-    maturity_date = datetime(year=2027, month=6, day=15)
+    issue_date = datetime.strptime(issue_date, "%Y-%m-%d")
+    maturity_date = datetime.strptime(maturity_date, "%Y-%m-%d")
 
     # Calculate time to each cash flow (in years)
     number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
