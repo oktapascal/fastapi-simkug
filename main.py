@@ -1,10 +1,12 @@
+from http.cookiejar import month
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, BackgroundTasks, File, Query
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from database import database
-from datetime import datetime as dt
+from datetime import datetime as dt, datetime
 import os
 import time
 import platform
@@ -110,3 +112,48 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
     return FileResponse(path=file_name, headers=headerResponse, filename=file_name)
   except Exception as ex:
     return {'status': 'ERROR', 'message': str(ex)}
+
+@app.get('/api/calculate-bond')
+def calculate_bond():
+  try:
+    coupon_rate = 0.0865
+    yield_rate = 0.067
+    frequency = 4
+    nominal = 5_000_000_000
+
+    # Assume today's date as the issue date for simplicity
+    issue_date = datetime(year=2024, month=8, day=31)
+    maturity_date = datetime(year=2027, month=6, day=15)
+
+    # Calculate time to each cash flow (in years)
+    number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+    cashflow_dates = []
+    for i in range (1, int(number_periods) + 1):
+      cashflow_dates.append(issue_date + pd.DateOffset(months=int(12/frequency*i)))
+
+    cashflow_times = []
+    for i in cashflow_dates:
+      cashflow_times.append((i-issue_date).days/365.0)
+
+    # Calculate cash flows
+    cash_flows = [nominal * coupon_rate/frequency] * (len(cashflow_times) - 1) + [nominal * (1+coupon_rate/frequency)]
+
+    # Discount cash flows to present value
+    discount_factors = []
+    for i in cashflow_times:
+      discount_factors.append(1/(1+yield_rate/frequency) ** (frequency * i))
+
+    pv_cash_flows = []
+    for cf, df in zip(cash_flows, discount_factors):
+      pv_cash_flows.append(cf * df)
+
+    # Calculate Macaulay Duration
+    maculay_duration = sum(ct * pcf for ct, pcf in zip(cashflow_times, pv_cash_flows)) / sum(pv_cash_flows)
+
+    # Calculate Modified Duration
+    modified_duration = maculay_duration / (1+yield_rate/frequency)
+
+    return {'status': 'OK', 'maculay_duration': maculay_duration, 'modified_duration': modified_duration }
+  except Exception as ex:
+    return {'status': 'ERROR', 'message': str(ex)}
+
