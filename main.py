@@ -6,7 +6,7 @@ from fastapi import FastAPI, BackgroundTasks, File, Query
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from database import database
-from datetime import datetime as dt, datetime
+from datetime import datetime as dt, datetime, timedelta
 import os
 import time
 import platform
@@ -14,6 +14,7 @@ import psutil
 import pyodbc
 import pandas as pd
 import math
+import numpy as np
 
 load_dotenv()
 
@@ -113,47 +114,144 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
   except Exception as ex:
     return {'status': 'ERROR', 'message': str(ex)}
 
+# @app.post('/api/v1/calculate-bond')
+# def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), frequency_count: int = Form(), basis: int = Form(), nominal: float = Form(), issue_date: str = Form(), maturity_date: str = Form()):
+#   try:
+#     coupon_rate =  rate_coupon/100
+#     yield_rate =  rate_yield/100
+#     frequency = frequency_count
+#     basis_point = basis
+#     face_value = nominal * 1e9
+#
+#     # Assume today's date as the issue date for simplicity
+#     issue_date = datetime.strptime(issue_date, "%Y-%m-%d")
+#     maturity_date = datetime.strptime(maturity_date, "%Y-%m-%d")
+#
+#     cashflow_dates = []
+#     cashflow_times = []
+#
+#     if basis_point == 0 or basis_point == 4:
+#       # Calculate time to each cash flow (in years)
+#       number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+#       for i in range (1, int(number_periods) + 1):
+#         cashflow_dates.append(issue_date + pd.DateOffset(months=int(12/frequency*i)))
+#
+#       for i in cashflow_dates:
+#         cashflow_times.append((i - issue_date).days / 365.0)
+#     elif basis_point == 1:
+#       current_date = issue_date
+#       while current_date < maturity_date:
+#         current_date += timedelta(days=int(365 / frequency))  # Tambahkan interval pembayaran
+#         if current_date > maturity_date:
+#           current_date = maturity_date  # Pastikan tidak melewati maturity date
+#         cashflow_dates.append(current_date)
+#
+#       for i in cashflow_dates:
+#         cashflow_times.append((i - issue_date).days / 365.0)
+#     elif basis_point == 2:
+#       # Calculate time to each cash flow (in years)
+#       number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+#       for i in range(1, int(number_periods) + 1):
+#         cashflow_dates.append(issue_date + pd.DateOffset(months=int(12 / frequency * i)))
+#
+#       for i in cashflow_dates:
+#         cashflow_times.append((i - issue_date).days / 360.0)
+#     elif basis_point == 3:
+#       # Calculate time to each cash flow (in years)
+#       number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+#       for i in range(1, int(number_periods) + 1):
+#         cashflow_dates.append(issue_date + pd.DateOffset(months=int(12 / frequency * i)))
+#
+#       for i in cashflow_dates:
+#         cashflow_times.append((i - issue_date).days / 365.0)
+#     else:
+#       return {'status': 'ERROR', 'message': 'Invalid basis'}
+#
+#     # Calculate cash flows
+#     cash_flows = [face_value * coupon_rate/frequency] * (len(cashflow_times) - 1) + [face_value * (1+coupon_rate/frequency)]
+#
+#     # Discount cash flows to present value
+#     discount_factors = []
+#     for i in cashflow_times:
+#       discount_factors.append(1/(1+yield_rate/frequency) ** (frequency * i))
+#
+#     pv_cash_flows = []
+#     for cf, df in zip(cash_flows, discount_factors):
+#       pv_cash_flows.append(cf * df)
+#
+#     # Calculate Macaulay Duration
+#     maculay_duration = sum(ct * pcf for ct, pcf in zip(cashflow_times, pv_cash_flows)) / sum(pv_cash_flows)
+#
+#     # Calculate Modified Duration
+#     modified_duration = maculay_duration / (1+yield_rate/frequency)
+#
+#     return {'status': 'OK', 'maculay_duration': maculay_duration, 'modified_duration': modified_duration }
+#   except Exception as ex:
+#     return {'status': 'ERROR', 'message': str(ex)}
+
 @app.post('/api/calculate-bond')
-def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), frequency_count: int = Form(), nominal: float = Form(), issue_date: str = Form(), maturity_date: str = Form()):
+def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), frequency_count: int = Form(), basis: int = Form(), nominal: float = Form(), issue_date: str = Form(), maturity_date: str = Form()):
   try:
     coupon_rate =  rate_coupon/100
     yield_rate =  rate_yield/100
     frequency = frequency_count
-    nominal = nominal * 1e9
+    basis_point = basis
+    face_value = nominal * 1e9
 
     # Assume today's date as the issue date for simplicity
-    issue_date = datetime.strptime(issue_date, "%Y-%m-%d")
-    maturity_date = datetime.strptime(maturity_date, "%Y-%m-%d")
+    issue_date = pd.to_datetime(issue_date, format="%Y-%m-%d")
+    maturity_date = pd.to_datetime(maturity_date, format="%Y-%m-%d")
 
-    # Calculate time to each cash flow (in years)
-    number_periods = frequency * ((maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+    data = pd.DataFrame()
+    n = pd.to_numeric(((pd.to_datetime(maturity_date) - pd.to_datetime(issue_date))/365).days)
+    total_payment = n * frequency
+    coupon_payment = coupon_rate / frequency * face_value
+    payment = [coupon_payment] * (total_payment-1) + [coupon_payment + face_value]
+
+    # Generate payment dates
+    payment_dates = [issue_date + pd.DateOffset(months=int(12 / frequency) * i) for i in range(1, total_payment + 1)]
+
+    # Calculate cashflow times based on basis
     cashflow_dates = []
-    for i in range (1, int(number_periods) + 1):
-      cashflow_dates.append(issue_date + pd.DateOffset(months=int(12/frequency*i)))
+    if basis_point in [0, 2, 3, 4]:
+      number_periods = frequency * (
+            (maturity_date.year - issue_date.year) + (maturity_date.month - issue_date.month) / 12)
+      cashflow_dates = [issue_date + pd.DateOffset(months=int(12 / frequency * i)) for i in
+                        range(1, int(number_periods) + 1)]
+    elif basis_point == 1:
+      current_date = issue_date
+      while current_date < maturity_date:
+        current_date += timedelta(days=int(365 / frequency))
+        if current_date > maturity_date:
+          current_date = maturity_date
+        cashflow_dates.append(current_date)
+    else:
+      return {'status': 'ERROR', 'message': 'Invalid basis'}
 
-    cashflow_times = []
-    for i in cashflow_dates:
-      cashflow_times.append((i-issue_date).days/365.0)
+    # Calculate time to each cash flow
+    if basis_point in [0, 4]:
+      cashflow_times = [(date - issue_date).days / 365.0 for date in cashflow_dates]
+    elif basis_point == 1:
+      cashflow_times = [(date - issue_date).days / 365.0 for date in cashflow_dates]
+    elif basis_point == 2:
+      cashflow_times = [(date - issue_date).days / 360.0 for date in cashflow_dates]
+    elif basis_point == 3:
+      cashflow_times = [(date - issue_date).days / 365.0 for date in cashflow_dates]
 
     # Calculate cash flows
-    cash_flows = [nominal * coupon_rate/frequency] * (len(cashflow_times) - 1) + [nominal * (1+coupon_rate/frequency)]
+    cash_flows = np.array([face_value * coupon_rate / frequency] * (len(cashflow_times) - 1) + [face_value * (1 + coupon_rate / frequency)])
 
     # Discount cash flows to present value
-    discount_factors = []
-    for i in cashflow_times:
-      discount_factors.append(1/(1+yield_rate/frequency) ** (frequency * i))
-
-    pv_cash_flows = []
-    for cf, df in zip(cash_flows, discount_factors):
-      pv_cash_flows.append(cf * df)
+    discount_factors = np.array([1 / (1 + yield_rate / frequency) ** (frequency * t) for t in cashflow_times])
+    pv_cash_flows = cash_flows * discount_factors
 
     # Calculate Macaulay Duration
-    maculay_duration = sum(ct * pcf for ct, pcf in zip(cashflow_times, pv_cash_flows)) / sum(pv_cash_flows)
+    maculay_duration = np.sum(np.array(cashflow_times) * pv_cash_flows) / np.sum(pv_cash_flows)
 
     # Calculate Modified Duration
-    modified_duration = maculay_duration / (1+yield_rate/frequency)
+    modified_duration = maculay_duration / (1 + yield_rate / frequency)
 
-    return {'status': 'OK', 'maculay_duration': maculay_duration, 'modified_duration': modified_duration }
+    return {'status': 'OK', 'duration': maculay_duration, 'modified_duration': modified_duration }
   except Exception as ex:
     return {'status': 'ERROR', 'message': str(ex)}
 
