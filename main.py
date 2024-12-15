@@ -266,13 +266,13 @@ def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), freq
     print(data)
 
     # Present Value (PV) dari pembayaran kupon
-    discount_factor = (1 + (rate_yield / frequency_count) / 100)
+    discount_factor = (1 + (rate_yield / frequency) / 100)
     data['discounted_cp'] = data['coupon_payment'] / (discount_factor ** data['period'])
     print(data)
 
     # Menghitung Macaulay Duration
     data['weight'] = data['discounted_cp'] * data['period']
-    macaulay_duration = data['weight'].sum() / data['discounted_cp'].sum() / frequency_count
+    macaulay_duration = data['weight'].sum() / data['discounted_cp'].sum() / frequency
     print(macaulay_duration)
 
     # Menghitung Modified Duration
