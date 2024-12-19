@@ -230,7 +230,7 @@ def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), freq
       1: ql.ActualActual(ql.ActualActual.ISDA),
       2: ql.Actual360(),
       3: ql.Actual365Fixed(),
-      4: ql.Thirty360(ql.Thirty360.BondBasis)
+      4: ql.Thirty360(ql.Thirty360.ISDA)
     }
 
     frequency = freq.get(frequency, ql.Annual)
