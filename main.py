@@ -205,7 +205,6 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
 @app.post('/api/calculate-bond')
 def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), frequency_count: int = Form(), basis: int = Form(), nominal: float = Form(), settlement_date: str = Form(), maturity_date: str = Form()):
   try:
-    data = pd.DataFrame()
     # define variable/input
     yield_rate = rate_yield / 100
     coupun_rate = rate_coupon / 100
