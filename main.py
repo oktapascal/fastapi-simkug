@@ -62,11 +62,13 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
     query = f'''
     select a.no_bukti,a.no_dokumen,a.tanggal,a.kode_pp,a.keterangan,
       case when a.dc='D' then a.nilai else 0 end as debet,case when a.dc='C' then a.nilai else 0 end as kredit
-    from gldt a
-    where a.kode_lokasi=? and a.kode_akun=? and a.periode=?
+    from gldt_h a
+    where a.kode_lokasi=? and periode=?
     order by a.tanggal
     '''
-    params = ['51','1152007','202301']
+    # params = ['51','1152007','202301']
+    params = ['51','202401']
+    # params = ['01', '2024']
     cursor.execute(query, params)
 
     read_time = f'{time.perf_counter() - t0:.1f} seconds'
