@@ -52,8 +52,8 @@ def test_db():
     print('{c} is not working'.format(c=dbproduk))
 
 
-@app.get('/api/excel/export/buku-besar')
-def excel_export_bukubesar(background_task: BackgroundTasks):
+@app.get('/api/excel/export/buku-besar/standard')
+def excel_export_bukubesar_standard(background_task: BackgroundTasks):
   try:
     t0 = time.perf_counter()
 
@@ -64,8 +64,6 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
     # Mengambil tahun dan bulan
     year = periode[:4]  # "2024"
     month_index = int(periode[4:]) - 1  # Dikurangi 1 agar bulan dimulai dari indeks 0
-
-    read_time = f'{time.perf_counter() - t0:.1f} seconds'
 
     with dbproduk.cursor() as cursor:
       query = f'''
@@ -121,6 +119,8 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
       cursor.execute(query)
 
       rows = cursor.fetchall()
+
+      read_time = f'{time.perf_counter() - t0:.1f} seconds'
 
       for no_bukti, no_dokumen, tanggal, keterangan, kode_akun, debet, kredit in rows:
         if kode_akun in data_akun:
@@ -270,6 +270,231 @@ def excel_export_bukubesar(background_task: BackgroundTasks):
     print(f'DB Read Time: {read_time}')
     print(f'Execution Time: {execution_time}')
     print('='*48)
+
+    return FileResponse(path=file_name, headers=headerResponse, filename=file_name)
+  except Exception as ex:
+    # logging.exception("An exception was thrown!")
+    return {'status': 'ERROR', 'message': str(ex)}
+  finally:
+    dbproduk.close()
+
+@app.get('/api/excel/export/buku-besar/audit')
+def excel_export_bukubesar_audit(background_task: BackgroundTasks):
+  try:
+    t0 = time.perf_counter()
+
+    dbproduk = connect_dbproduk()
+    list_bulan = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI", "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER",
+                  "NOVEMBER", "DESEMBER"]
+    periode = '202410'
+    # Mengambil tahun dan bulan
+    year = periode[:4]  # "2024"
+    month_index = int(periode[4:]) - 1  # Dikurangi 1 agar bulan dimulai dari indeks 0
+
+    with dbproduk.cursor() as cursor:
+      query = f'''
+      select a.kode_akun, a.nama, a.so_awal
+      from glma_tmp a 
+      where a.periode = '202401' and a.kode_lokasi = '01'
+      order by a.kode_akun
+      '''
+
+      cursor.execute(query)
+
+      rows = cursor.fetchall()
+
+      # Dictionary untuk menyimpan data unik berdasarkan kode_akun
+      data_akun = {}
+
+      for kode_akun, nama_akun, saldo_awal in rows:
+        if kode_akun not in data_akun:
+          data_akun[kode_akun] = {
+            'kode_akun': kode_akun,
+            'nama_akun': nama_akun,
+            'fix_saldo': saldo_awal,
+            'saldo_awal': saldo_awal,
+            'total_debet': 0,
+            'total_kredit': 0,
+            'total_saldo': 0,
+            'jurnal': []
+          }
+
+      result = list(data_akun.values())
+
+      # Membuat string berisi kode akun
+      kode_akun_list = ','.join(f"'{kode}'" for kode in data_akun.keys())
+
+      query = f'''
+      select a.no_bukti, a.no_dokumen, convert(varchar, a.tanggal, 103) tanggal, a.keterangan, a.kode_akun, b.nama nama_akun,
+       case when a.dc='D' then nilai else 0 end as debet,
+       case when a.dc='C' then nilai else 0 end as kredit
+      from (
+        select a.kode_lokasi, a.no_bukti, a.no_dokumen, a.periode, a.tanggal, a.kode_akun, a.kode_pp, a.kode_drk, a.dc,
+        a.nilai, a.keterangan, a.modul
+        from gldt_h a
+        where a.kode_lokasi='01' and substring(a.periode,1,4)=substring('{periode}',1,4) and a.kode_akun in ({kode_akun_list}) and a.periode between '202401' and '202412'
+        union all
+        select a.kode_lokasi, a.no_bukti, a.no_dokumen, a.periode, a.tanggal, a.kode_akun, a.kode_pp, a.kode_drk, a.dc,
+        a.nilai, a.keterangan, a.modul
+        from gldt a
+        where a.kode_lokasi='01' and substring(a.periode,1,4)=substring('{periode}',1,4) and a.kode_akun in ({kode_akun_list}) and a.periode between '202401' and '202412'
+      ) a
+      inner join masakun b on a.kode_akun=b.kode_akun and a.kode_lokasi=b.kode_lokasi
+      order by a.tanggal, a.no_bukti
+      '''
+
+      cursor.execute(query)
+
+      rows = cursor.fetchall()
+
+      for no_bukti, no_dokumen, tanggal, keterangan, kode_akun, naam_akun, debet, kredit in rows:
+        if kode_akun in data_akun:
+          data_akun[kode_akun]['saldo_awal'] += debet - kredit
+          data_akun[kode_akun]['total_saldo'] = data_akun[kode_akun]['saldo_awal']
+          data_akun[kode_akun]['total_debet'] += debet
+          data_akun[kode_akun]['total_kredit'] += kredit
+
+          data_akun[kode_akun]['jurnal'].append({
+            'kode_akun': kode_akun,
+            'nama_akun': nama_akun,
+            'no_bukti': no_bukti,
+            'no_dokumen': no_dokumen,
+            'tanggal': tanggal,
+            'keterangan': keterangan,
+            'debet': debet,
+            'kredit': kredit,
+            'saldo': data_akun[kode_akun]['total_saldo']
+          })
+
+      result = list(data_akun.values())
+
+      read_time = f'{time.perf_counter() - t0:.1f} seconds'
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = 'Laporan Buku Besar'
+
+    start_row = 1
+    sheet.merge_cells(start_row=start_row, end_row=start_row, start_column=1, end_column=9)
+    sheet.cell(row=start_row, column=1).value = 'PT. GRAHA INFORMATIKA NUSANTARA'
+    sheet.cell(row=start_row, column=1).alignment = Alignment(horizontal='center')
+
+    sheet.merge_cells(start_row=start_row + 1, end_row=start_row + 1, start_column=1, end_column=9)
+    sheet.cell(row=start_row + 1, column=1).value = 'LAPORAN BUKU BESAR'
+    sheet.cell(row=start_row + 1, column=1).alignment = Alignment(horizontal='center')
+
+    sheet.merge_cells(start_row=start_row + 2, end_row=start_row + 2, start_column=1, end_column=9)
+    sheet.cell(row=start_row + 2, column=1).value = f'Tahun {year}'
+    sheet.cell(row=start_row + 2, column=1).alignment = Alignment(horizontal='center')
+
+    sheet.column_dimensions["A"].width = 19.55
+    sheet.column_dimensions["B"].width = 28.82
+    sheet.column_dimensions["C"].width = 2.55
+    sheet.column_dimensions["D"].width = 9.82
+    sheet.column_dimensions["E"].width = 18.73
+    sheet.column_dimensions["F"].width = 34.27
+    sheet.column_dimensions["G"].width = 10.27
+    sheet.column_dimensions["H"].width = 10.27
+    sheet.column_dimensions["I"].width = 10.27
+
+    for value in result:
+      sheet.cell(row=start_row + 4, column=1).value = 'SALDO AWAL'
+      sheet.cell(row=start_row + 4, column=1).alignment = Alignment(horizontal='right')
+      sheet.cell(row=start_row + 4, column=1).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+      sheet.cell(row=start_row + 4, column=9).value = value['fix_saldo']
+      sheet.cell(row=start_row + 4, column=9).number_format = '#,##0'
+      sheet.cell(row=start_row + 4, column=9).alignment = Alignment(horizontal='right')
+      sheet.cell(row=start_row + 4, column=9).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+      sheet.cell(row=start_row + 4, column=9).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+      sheet.merge_cells(start_row=start_row + 4, end_row=start_row + 4, start_column=1, end_column=8)
+
+      jurnal_header = ['AKUN', 'NAMA AKUN', 'NO', 'TANGGAL', 'NO BUKTI', 'KETERANGAN', 'DEBET', 'KREDIT', 'SALDO']
+      for col, header in enumerate(jurnal_header, start=1):
+        sheet.cell(row=start_row + 5, column=col).value = header
+        sheet.cell(row=start_row + 5, column=col).fill = PatternFill(start_color='B5B5B5', end_color='B5B5B5',fill_type='solid')
+        sheet.cell(row=start_row + 5, column=col).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=start_row + 5, column=col).alignment = Alignment(horizontal='center')
+
+      current_row = start_row + 5 + 1
+      for indeks, jurnal in enumerate(value['jurnal'], start=1):
+        sheet.cell(row=current_row, column=1).value = jurnal['kode_akun']
+        sheet.cell(row=current_row, column=1).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=2).value = jurnal['nama_akun']
+        sheet.cell(row=current_row, column=2).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=3).value = indeks
+        sheet.cell(row=current_row, column=3).alignment = Alignment(horizontal='center')
+        sheet.cell(row=current_row, column=3).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=4).value = jurnal['tanggal']
+        sheet.cell(row=current_row, column=4).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=5).value = jurnal['no_bukti']
+        sheet.cell(row=current_row, column=5).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=6).value = jurnal['keterangan']
+        sheet.cell(row=current_row, column=6).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=7).value = jurnal['debet']
+        sheet.cell(row=current_row, column=7).number_format = '#,##0'
+        sheet.cell(row=current_row, column=7).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=8).value = jurnal['kredit']
+        sheet.cell(row=current_row, column=8).number_format = '#,##0'
+        sheet.cell(row=current_row, column=8).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        sheet.cell(row=current_row, column=9).value = jurnal['saldo']
+        sheet.cell(row=current_row, column=9).number_format = '#,##0'
+        sheet.cell(row=current_row, column=9).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+        current_row += 1
+
+      sheet.cell(row=current_row, column=1).value = 'TOTAL'
+      sheet.cell(row=current_row, column=1).alignment = Alignment(horizontal='right')
+      sheet.cell(row=current_row, column=1).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+      sheet.merge_cells(start_row=current_row, end_row=current_row, start_column=1, end_column=6)
+
+      sheet.cell(row=current_row, column=7).value = value['total_debet']
+      sheet.cell(row=current_row, column=7).number_format = '#,##0'
+      sheet.cell(row=current_row, column=7).alignment = Alignment(horizontal='right')
+      sheet.cell(row=current_row, column=7).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+
+      sheet.cell(row=current_row, column=8).value = value['total_kredit']
+      sheet.cell(row=current_row, column=8).number_format = '#,##0'
+      sheet.cell(row=current_row, column=8).alignment = Alignment(horizontal='right')
+      sheet.cell(row=current_row, column=8).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+
+      sheet.cell(row=current_row, column=9).value = value['total_saldo']
+      sheet.cell(row=current_row, column=9).number_format = '#,##0'
+      sheet.cell(row=current_row, column=9).alignment = Alignment(horizontal='right')
+      sheet.cell(row=current_row, column=9).border = Border(left=Side(style='thin', color='000000'), right=Side(style='thin', color='000000'), top=Side(style='thin', color='000000'), bottom=Side(style='thin', color='000000'))
+
+      start_row = start_row + 4 + len(value['jurnal']) + 2
+
+    today = dt.now()
+    unique_id = today.strftime('%Y%m%d%H%M%S')
+
+    file_name = f'BUKU_BESAR_{list_bulan[0]}_{list_bulan[11]}_{year}_{unique_id}.xlsx'
+
+    workbook.save(file_name)
+
+    execution_time = f'{time.perf_counter() - t0:.1f} seconds'
+
+    headerResponse = {
+      'Content-Disposition': 'attachment; filename="' + file_name + '"'
+    }
+
+    background_task.add_task(os.remove, file_name)
+
+    os_info = platform.system()
+    total_memory = psutil.virtual_memory().total / (1024 ** 3)
+    used_memory = psutil.virtual_memory().used / (1024 ** 3)
+    total_memory_rounded = math.ceil(total_memory * 100) / 100
+    used_memory_rounded = math.ceil(used_memory * 100) / 100
+    total_cpu = psutil.cpu_count()
+    cpu_usage = psutil.cpu_percent(interval=1)
+
+    print('=' * 48)
+    print(f'OS: {os_info}')
+    print(f'CPU: {total_cpu} cores')
+    print(f'CPU Usage: {cpu_usage}%')
+    print(f'RAM: {total_memory_rounded} GB')
+    print(f'RAM Usage: {used_memory_rounded} GB')
+    print(f'DB Read Time: {read_time}')
+    print(f'Execution Time: {execution_time}')
+    print('=' * 48)
 
     return FileResponse(path=file_name, headers=headerResponse, filename=file_name)
   except Exception as ex:
