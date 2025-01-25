@@ -241,7 +241,7 @@ def excel_export_bukubesar_standard(background_task: BackgroundTasks):
     today = dt.now()
     unique_id = today.strftime('%Y%m%d%H%M%S')
 
-    file_name = f'BUKU_BESAR_{list_bulan[month_index]}{year}_{unique_id}.xlsx'
+    file_name = f'BUKU_BESAR_STANDARD_{list_bulan[month_index]}{year}_{unique_id}.xlsx'
 
     workbook.save(file_name)
 
@@ -347,7 +347,7 @@ def excel_export_bukubesar_audit(background_task: BackgroundTasks):
 
       rows = cursor.fetchall()
 
-      for no_bukti, no_dokumen, tanggal, keterangan, kode_akun, naam_akun, debet, kredit in rows:
+      for no_bukti, no_dokumen, tanggal, keterangan, kode_akun, nama_akun, debet, kredit in rows:
         if kode_akun in data_akun:
           data_akun[kode_akun]['saldo_awal'] += debet - kredit
           data_akun[kode_akun]['total_saldo'] = data_akun[kode_akun]['saldo_awal']
@@ -466,7 +466,7 @@ def excel_export_bukubesar_audit(background_task: BackgroundTasks):
     today = dt.now()
     unique_id = today.strftime('%Y%m%d%H%M%S')
 
-    file_name = f'BUKU_BESAR_{list_bulan[0]}_{list_bulan[11]}_{year}_{unique_id}.xlsx'
+    file_name = f'BUKU_BESAR_AUDIT_{list_bulan[0]}_{list_bulan[11]}_{year}_{unique_id}.xlsx'
 
     workbook.save(file_name)
 
