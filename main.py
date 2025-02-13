@@ -28,6 +28,12 @@ def connect_dbproduk():
 
   return engine.connect()
 
+def connect_dbyakes():
+  engine = database.Database(os.getenv('DB_USER2'), os.getenv('DB_PASSWORD2'), os.getenv('DB_HOST2'),
+                             os.getenv('DB_NAME2'), os.getenv('DB_PORT2'))
+
+  return engine.connect()
+
 app = FastAPI()
 app.add_middleware(
   CORSMiddleware,
@@ -50,6 +56,17 @@ def test_db():
     return {'status': 'OK', 'message': 'Success Connect Database'}
   except pyodbc.Error as ex:
     print('{c} is not working'.format(c=dbproduk))
+
+@app.get('/test-db/yakes')
+def test_db():
+  try:
+    dbyakes = connect_dbyakes()
+    print('{c} is working'.format(c=dbyakes))
+    dbyakes.close()
+
+    return {'status': 'OK', 'message': 'Success Connect Database'}
+  except pyodbc.Error as ex:
+    print('{c} is not working'.format(c=dbyakes))
 
 
 @app.get('/api/excel/export/buku-besar/standard')
@@ -587,5 +604,146 @@ def calculate_bond(rate_coupon: float = Form(), rate_yield: float = Form(), freq
     modified_duration = ql.BondFunctions.duration(fixed_rate_bonds, rate, ql.Duration.Modified)
 
     return {'status': 'OK', 'macaulay_duration': np.round(macaulay_duration, 2), 'modified_duration': np.round(modified_duration, 2)}
+  except Exception as ex:
+    return {'status': 'ERROR', 'message': str(ex)}
+
+@app.post('/api/batch/calculate-bond')
+def batch_calculate_bond(tanggal: str = Form()):
+  try:
+    dbyakes = connect_dbyakes()
+
+    def calculate_bond(coupon,ryield,_frequency,_basis,nominal,settlement_date,maturity_date):
+      ql_settlement_date = ql.Date(settlement_date.day, settlement_date.month, settlement_date.year)
+      ql_maturity_date = ql.Date(maturity_date.day, maturity_date.month, maturity_date.year)
+
+      ql.Settings.instance().evaluationDate = ql_settlement_date
+
+      freq = {
+        1: ql.Annual,
+        2: ql.Semiannual,
+        4: ql.Quarterly,
+      }
+
+      basis = {
+        0: ql.Actual360(),
+        1: ql.ActualActual(ql.ActualActual.ISDA),
+        2: ql.Actual360(),
+        3: ql.Actual365Fixed(),
+        4: ql.Thirty360(ql.Thirty360.ISDA)
+      }
+
+      frequency = freq.get(_frequency, ql.Annual)
+      tenor = ql.Period(frequency)
+      business_convention = ql.Unadjusted
+      calendar = ql.NullCalendar()
+      date_generation = ql.DateGeneration.Forward
+      basis_point = basis.get(_basis, ql.ActualActual(ql.ActualActual.ISDA))
+
+      # create the schedule for the bond
+      schedule = ql.Schedule(
+        ql_settlement_date,
+        ql_maturity_date,
+        tenor,
+        calendar,
+        business_convention,
+        business_convention,
+        date_generation,
+        False
+      )
+
+      # define the fixed-rate bond
+      coupons = [coupon]
+      fixed_rate_bonds = ql.FixedRateBond(
+        0,
+        nominal,
+        schedule,
+        coupons,
+        basis_point,
+      )
+
+      simple_quote = ql.SimpleQuote(ryield)
+      quote_handle = ql.QuoteHandle(simple_quote)
+      compounding = ql.Compounded
+
+      # set up the yield curve (discounting term structure)
+      flat_forward = ql.FlatForward(ql_settlement_date, quote_handle, basis_point, compounding, frequency)
+      yield_rate_handle = ql.YieldTermStructureHandle(flat_forward)
+
+      # set up the bond pricing engine
+      bond_engine = ql.DiscountingBondEngine(yield_rate_handle)
+      fixed_rate_bonds.setPricingEngine(bond_engine)
+
+      # calculating yields
+      target_price = fixed_rate_bonds.cleanPrice()
+      ytm = fixed_rate_bonds.bondYield(target_price, basis_point, compounding, frequency)
+
+      # calculating interest rate
+      rate = ql.InterestRate(ytm, basis_point, compounding, frequency)
+
+      # calculate durations
+      macaulay_duration = ql.BondFunctions.duration(fixed_rate_bonds, rate, ql.Duration.Macaulay)
+      modified_duration = ql.BondFunctions.duration(fixed_rate_bonds, rate, ql.Duration.Modified)
+
+      return modified_duration
+
+    with dbyakes.cursor() as cursor:
+      cursor.execute(f"delete from inv_obli_durasi where tanggal_gen='{tanggal}'")
+      cursor.commit()
+
+      query = f'''
+      select a.tanggal tgl_settl,b.tgl_selesai tgl_matur,
+        case c.kode_obligor when 'CO' then 4 else 1 end basis,
+        case c.kode_obligor when 'CO' then 4 else 2 end freq,
+        round(sum(a.n_wajar / a.p_harga * 100) / 1, 2) nominal,b.persen kupon,e.yield,
+        d.kode_rdkelola as kode_mi,a.kode_jenis as kode_jenis,0.00 durasi,0.00 avg_durasi
+      from inv_obli_kkp a
+      inner join inv_oblijenis b on a.kode_jenis = b.kode_jenis
+      inner join inv_obligor c on b.kode_obligor = c.kode_obligor
+      inner join inv_rdkelola d on a.kode_rdkelola = d.kode_rdkelola
+      inner join inv_obli_harga e ON a.kode_jenis = e.kode_jenis and a.tanggal = e.tanggal    
+      where a.tanggal='{tanggal}'
+      group by a.tanggal,c.jenis,a.kode_jenis,d.kode_rdkelola,case c.kode_obligor when 'CO' then 4 else 2 end,
+      case c.kode_obligor when 'CO' then 4 else 1 end,b.tgl_selesai,b.persen,e.yield,a.p_harga
+      order by a.kode_jenis
+      '''
+      cursor.execute(query)
+
+      rows = cursor.fetchall()
+      df = pd.DataFrame.from_records(rows)
+
+      count = 0
+      sql_statement = "BEGIN TRANSACTION \r\n"
+      # 1. Hitung dulu mduration per masing-masing
+      for index, row in df.iterrows():
+        count += 1
+
+        mduration = calculate_bond(row[5],row[6],row[3],row[2],row[4],row[0],row[1])
+
+        df.loc[index, 9] = mduration
+
+        sql_statement += f'''
+        insert into inv_obli_durasi (tanggal_gen,kode_mi,kode_jenis,durasi,durasi_avg)
+        values ('{tanggal}','{row[7]}','{row[8]}',{df.loc[index, 9]},{df.loc[index, 10]})
+        '''
+        print(sql_statement)
+
+        if count % 100 == 0:
+          sql_statement += "COMMIT TRANSACTION"
+          cursor.execute(sql_statement)
+          cursor.commit()
+          sql_statement = "BEGIN TRANSACTION \r\n"
+
+      if sql_statement != "BEGIN TRANSACTION \r\n":
+        sql_statement += "COMMIT TRANSACTION"
+        cursor.execute(sql_statement)
+        cursor.commit()
+
+      # 2. Cari obligasi yang sama jika ada
+      # skip dulu karena tidak ada data yang mendukung
+      # 3. Jika ada yang sama, apakah nilai pembeliannya sama atau berbeda tiap tanggal
+      # skip dulu karena tidak ada data yang mendukung
+      # 4. Jika sama hitung rata-rata durasinya dengan WAMD, jika sama gunakan aritmatika biasa
+      # skip dulu karena tidak ada data yang mendukung
+    return {'status': 'OK'}
   except Exception as ex:
     return {'status': 'ERROR', 'message': str(ex)}
