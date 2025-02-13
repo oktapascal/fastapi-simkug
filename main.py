@@ -725,7 +725,6 @@ def batch_calculate_bond(tanggal: str = Form()):
         insert into inv_obli_durasi (tanggal_gen,kode_mi,kode_jenis,durasi,durasi_avg)
         values ('{tanggal}','{row[7]}','{row[8]}',{df.loc[index, 9]},{df.loc[index, 10]})
         '''
-        print(sql_statement)
 
         if count % 100 == 0:
           sql_statement += "COMMIT TRANSACTION"
